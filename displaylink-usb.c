@@ -303,8 +303,6 @@ int displaylink_setup(struct displaylink_dev *dev) {
 
 	printk("sent encryption null key: %d\n", ret);
 
-	dev->screen_size = 1600 * 1200 * (FB_BPP / 8);
-
         dev->line_length = EDID_GET_WIDTH(best_edid) * (FB_BPP / 8);
 
 	printk("displaylink monitor info: W(%d) H(%d) clock(%d)\n",
@@ -313,7 +311,8 @@ int displaylink_setup(struct displaylink_dev *dev) {
 		best_edid->pixel_clock
 		);
 
-	
+	dev->screen_size = EDID_GET_WIDTH(best_edid) * 
+			EDID_GET_HEIGHT(best_edid) * (FB_BPP / 8);
 
 	return 0;
 }
