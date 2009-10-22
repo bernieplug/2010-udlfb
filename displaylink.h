@@ -8,7 +8,7 @@
 #include <linux/fb.h>
 #include <linux/mutex.h>
 #include <linux/vmalloc.h>
-
+#include <linux/byteorder/generic.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,30)
 #include <drm/drm_edid.h>

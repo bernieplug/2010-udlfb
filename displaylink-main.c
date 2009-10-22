@@ -64,7 +64,7 @@ displaylink_probe(struct usb_interface *interface, const struct usb_device_id *i
 
 	dev->tx_urb = usb_alloc_urb(0, GFP_KERNEL);
 	usb_fill_bulk_urb(dev->tx_urb, dev->udev,
-			  usb_sndbulkpipe(dev->udev, 1), dev->buf, 0,
+			  usb_sndbulkpipe(dev->udev, 1), dev->buf, BUF_SIZE,
 			  displaylink_bulk_callback, dev);
 
 	if (strlen(dev->udev->product) > 63) {
