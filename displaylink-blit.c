@@ -1,6 +1,3 @@
-/* blit/compression functions */
-/* all the real optimizations goes here */
-
 #ifndef DISPLAYLINK
         #include "displaylink.h"
 #endif
@@ -155,7 +152,7 @@ displaylink_image_blit(struct displaylink_dev *dev, int x, int y, int width, int
 {
   const int host_pixel_size = 2; // this blit only handles 16bpp 565 source data
   const int device_pixel_size = 2; // and displaylink device (target) of same format
-  int i, j, ret;
+  int i, j, k, ret;
   char *cmd, *cmd_end;
 
   mutex_lock(&dev->bulk_mutex);
@@ -204,6 +201,24 @@ displaylink_image_blit(struct displaylink_dev *dev, int x, int y, int width, int
         next_pixel = &next_pixel[j];
         dev_addr += j * device_pixel_size;
         break;
+      }
+    }
+
+    if (j == width) 
+    {
+      // no actual changes in this line
+      next_pixel = line_end;
+
+    } else {
+
+      // adjust line_end to last pixel that actually changed
+      for (k = (width-1); k > j; k--) 
+      {
+	if (back_start[k] != line_start[k])
+        {
+          line_end = &line_start[k+1];
+          break;
+	}
       }
     }
 
