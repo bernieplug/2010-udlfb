@@ -26,8 +26,9 @@ buffers if the line will take several buffers to complete.
 //regardless of the compression ratio (protocol design limit).
 //To the hardware, 0 for a size byte means 256
 #define MAX_CMD_PIXELS		255
-// sync, cmd, 3 address, write len, raw len, 2 raw pixel bytes
-#define MIN_RLX_CMD_BYTES	9
+#define MIN_RLX_PIX_BYTES       4
+// sync, cmd, 3 address, write len, raw len, plus min pixel bytes
+#define MIN_RLX_CMD_BYTES	(7 + MIN_RLX_PIX_BYTES)
 
 #define MIN(a,b) ((a)>(b)?(b):(a))
 
@@ -36,20 +37,18 @@ void displaylink_render_rgb565_hline_rlx(
   const uint16_t*	const pixel_end,
   uint32_t              *device_address_ptr,
   uint8_t*      	*command_buffer_ptr,
-  const uint8_t*	const cmd_end)
+  const uint8_t*	const cmd_buffer_end)
 {
   const uint16_t*       pixel     = *pixel_start_ptr;
   uint32_t		dev_addr  = *device_address_ptr;
   uint8_t*              cmd       = *command_buffer_ptr;
 
-  while ((pixel_end > pixel) && (cmd_end > cmd + MIN_RLX_CMD_BYTES))
+  while ((pixel_end > pixel) && (cmd_buffer_end > cmd + MIN_RLX_CMD_BYTES))
   {
     uint8_t *raw_pixels_count_byte = 0;
     uint8_t *cmd_pixels_count_byte = 0;
-    enum { raw, rle } render_state;
     const uint16_t *raw_pixel_start = 0;
     const uint16_t *cmd_pixel_start, *cmd_pixel_end = 0;
-    uint16_t pixel_repeat = 0;
     uint32_t be_dev_addr = htonl(dev_addr);
  
     *cmd++ = 0xAF;
@@ -61,81 +60,67 @@ void displaylink_render_rgb565_hline_rlx(
     cmd_pixels_count_byte = cmd++;       // we'll know this later
     cmd_pixel_start = pixel;
  
-    render_state = raw; // alternating raw/rle spans always start raw
-    raw_pixels_count_byte = cmd++; // we'll know this later
+    raw_pixels_count_byte = cmd++;       // we'll know this later
     raw_pixel_start = pixel;
 	
     cmd_pixel_end = pixel + MIN(pixel_end - pixel, MAX_CMD_PIXELS + 1);
 
-    while ((cmd_pixel_end > pixel) && 
-      (cmd_end > cmd + 1)) // Worst case of 2 bytes to encode one pixel
+    while (cmd_buffer_end > cmd + MIN_RLX_PIX_BYTES)
     {
-      switch (render_state) {
-      case raw:
+      const uint16_t* repeating_pixel = pixel;
+      uint16_t be_pixel = htons(*pixel); //kernel headers inline asm
+
+      *cmd++ = (be_pixel) & 0xFF;
+      *cmd++ = (be_pixel >> 8) & 0xFF;
+
+      pixel++;
+      if (pixel >= cmd_pixel_end) break;
+
+      // Does this next pixel repeat? RAW->RLE->RAW overhead is 2 bytes
+      // So just 2 duplicate pixels is a wash, 3 is a win
+      if (*pixel == *repeating_pixel)
       {
-        uint16_t be_pixel = htons(*pixel);
-        
-        *cmd++ = (be_pixel) & 0xFF;
-	*cmd++ = (be_pixel >> 8) & 0xFF;
-	
-	// Does this pixel repeat? RAW->RLE->RAW overhead is 2 bytes
-	// So just 2 duplicate pixels is a wash, 3 is a win
-	if (pixel[0] == pixel[1])
-        {
-          // finalize length of prior span of raw pixels. +1 for pixel[0]
-          *raw_pixels_count_byte = (pixel - raw_pixel_start + 1) & 0xFF;
+        // finalize length of prior span of raw pixels.
+        *raw_pixels_count_byte = (pixel - raw_pixel_start) & 0xFF;
 
-          // start keeping track of how many times to repeat pixel
-          pixel_repeat = 0; 
-
-          render_state = rle;
-        }
-
-	pixel++;		
-        break;
-      }
-      case rle:
-	pixel_repeat++;
-	if (pixel[0] != pixel[1])
-        {
-          // how sad, our run has ended. Write out pixel repeat count
-          *cmd++ = pixel_repeat & 0xFF;
-
-          raw_pixel_start = &pixel[1];
-	
-	  // hardware expects next byte to be number of raw pixels
-          // in the next span.  We don't know that yet, fill in later
-          raw_pixels_count_byte = cmd++;
-
-	  render_state = raw;
+	pixel++;
+ 	while ((pixel < cmd_pixel_end) && (*pixel == *repeating_pixel))
+	{
+	  pixel++;
 	}
 
-        pixel++;
-        break;
+        // how sad, our run has ended. Write out pixel repeat count
+        *cmd++ = ((pixel - repeating_pixel) - 1)  & 0xFF;
+
+	// hardware then alternates back to the next raw span
+        raw_pixel_start = pixel;
+
+      	// hardware expects next byte to be number of raw pixels
+        // in the next span.  We don't know that yet, fill in later
+        raw_pixels_count_byte = cmd++;
+
+	if (pixel == cmd_pixel_end) break;
+
       }
     }
 
-    // We're done or hit a command length or command buffer limit. Finalize
-    switch(render_state) {
-    case raw:
-        *raw_pixels_count_byte = (pixel - raw_pixel_start) & 0xFF;
-      break;
-    case rle:
-        // in rle state, we couldn't have exhausted buffer
-        *cmd++ = pixel_repeat;
-      break;
+    if (pixel > raw_pixel_start) 
+    {
+      *raw_pixels_count_byte = (pixel - raw_pixel_start) & 0xFF;
+    } else {
+      cmd--;
     }
 
     *cmd_pixels_count_byte = (pixel - cmd_pixel_start) & 0xFF; 
     dev_addr += (pixel - cmd_pixel_start) * 2;
   }
 
-  if (cmd_end <= MIN_RLX_CMD_BYTES + cmd) 
+  if (cmd_buffer_end <= MIN_RLX_CMD_BYTES + cmd) 
   {
     // We don't have room for anything useful. Fill last few
     // bytes with no-ops
-    if (cmd_end > cmd)  memset(cmd, 0xAF, cmd_end - cmd);
-    cmd = (uint8_t*) cmd_end;
+    if (cmd_buffer_end > cmd)  memset(cmd, 0xAF, cmd_buffer_end - cmd);
+    cmd = (uint8_t*) cmd_buffer_end;
   }
 
   *command_buffer_ptr = cmd;
@@ -176,8 +161,7 @@ displaylink_image_blit(struct displaylink_dev *dev, int x, int y, int width, int
     return -EINVAL;
   }
 
-  //printk("IMAGE_BLIT, frame buffer %x - %x\n", (unsigned int) data,
-  //  (unsigned int) (data + (dev->line_length*dev->fb_info->var.yres)));
+  //printk("IMAGE_BLIT, %dx%d frame buffer %x - %x\n", width, height, (unsigned int) data, (unsigned int) (data + (dev->line_length*dev->fb_info->var.yres)));
 
   for (i = y; i < y + height ; i++) {
     const uint16_t *line_start, *line_end, *back_start, *next_pixel;
@@ -224,11 +208,7 @@ displaylink_image_blit(struct displaylink_dev *dev, int x, int y, int width, int
 
     while (next_pixel < line_end) {
 
-      //if (i==y) {
-      //  printk("rlx width=%x hstart=%x hend=%x daddr=%x cmd=%x cmd_end=%x\n",
-      //    (unsigned int) width, (unsigned int) next_pixel, (unsigned int) line_end, 
-      //    (unsigned int) dev_addr, (unsigned int) cmd, (unsigned int) cmd_end);
-      //}
+      //{ printk("rlx width=%x pixel=%x pixel_end=%x daddr=%x cmd=%x cmd_end=%x\n", (unsigned int) width, (unsigned int) next_pixel, (unsigned int) line_end,(unsigned int) dev_addr, (unsigned int) cmd, (unsigned int) cmd_end);}
 
       displaylink_render_rgb565_hline_rlx(
 	&next_pixel,
