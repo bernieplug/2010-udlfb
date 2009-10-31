@@ -43,13 +43,13 @@ void displaylink_render_rgb565_hline_rlx(
   uint32_t		dev_addr  = *device_address_ptr;
   uint8_t*              cmd       = *command_buffer_ptr;
 
-  while ((pixel_end > pixel) && (cmd_buffer_end > cmd + MIN_RLX_CMD_BYTES))
+  while ((pixel_end > pixel) && (cmd_buffer_end - MIN_RLX_CMD_BYTES > cmd))
   {
     uint8_t *raw_pixels_count_byte = 0;
     uint8_t *cmd_pixels_count_byte = 0;
     const uint16_t *raw_pixel_start = 0;
     const uint16_t *cmd_pixel_start, *cmd_pixel_end = 0;
-    uint32_t be_dev_addr = htonl(dev_addr);
+    const uint32_t be_dev_addr = htonl(dev_addr);
  
     *cmd++ = 0xAF;
     *cmd++ = 0x6B;
@@ -65,50 +65,48 @@ void displaylink_render_rgb565_hline_rlx(
 	
     cmd_pixel_end = pixel + MIN(pixel_end - pixel, MAX_CMD_PIXELS + 1);
 
-    while (cmd_buffer_end > cmd + MIN_RLX_PIX_BYTES)
+    while ((pixel < cmd_pixel_end) && (cmd_buffer_end - MIN_RLX_PIX_BYTES > cmd))
     {
-      const uint16_t* repeating_pixel = pixel;
-      uint16_t be_pixel = htons(*pixel); //kernel headers inline asm
+      const uint16_t* const repeating_pixel = pixel;
+      const uint16_t be_pixel = htons(*pixel); //kernel headers inline asm
 
       *cmd++ = (be_pixel) & 0xFF;
       *cmd++ = (be_pixel >> 8) & 0xFF;
-
       pixel++;
-      if (pixel >= cmd_pixel_end) break;
 
-      // Does this next pixel repeat? RAW->RLE->RAW overhead is 2 bytes
-      // So just 2 duplicate pixels is a wash, 3 is a win
-      if (*pixel == *repeating_pixel)
+      while ((pixel < cmd_pixel_end) && (*pixel == *repeating_pixel))
       {
-        // finalize length of prior span of raw pixels.
-        *raw_pixels_count_byte = (pixel - raw_pixel_start) & 0xFF;
+        pixel++;
+      }
 
-	pixel++;
- 	while ((pixel < cmd_pixel_end) && (*pixel == *repeating_pixel))
-	{
-	  pixel++;
-	}
+      if (pixel > repeating_pixel + 2)
+      {
+	// We've got (to the end of) an RLE span worth encoding
 
-        // how sad, our run has ended. Write out pixel repeat count
+	// go back and finalize length of last raw span
+        *raw_pixels_count_byte = ((repeating_pixel - raw_pixel_start) + 1) & 0xFF;
+        // Immediately following the end of raw data is a byte
+	// telling how many additional times to repeat the last raw pixel
         *cmd++ = ((pixel - repeating_pixel) - 1)  & 0xFF;
 
-	// hardware then alternates back to the next raw span
+	// Start a new raw span
         raw_pixel_start = pixel;
 
       	// hardware expects next byte to be number of raw pixels
         // in the next span.  We don't know that yet, fill in later
         raw_pixels_count_byte = cmd++;
 
-	if (pixel == cmd_pixel_end) break;
-
+      } else {
+	// Not worth it. Back up and process as raw pixels
+	pixel = repeating_pixel + 1;
       }
+
     }
 
     if (pixel > raw_pixel_start) 
     {
+      // finalize last RAW span
       *raw_pixels_count_byte = (pixel - raw_pixel_start) & 0xFF;
-    } else {
-      cmd--;
     }
 
     *cmd_pixels_count_byte = (pixel - cmd_pixel_start) & 0xFF; 
