@@ -25,6 +25,7 @@
 #include <linux/mutex.h>
 #include <linux/vmalloc.h>
 #include <linux/version.h>
+#include <linux/byteorder/generic.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,30)
 #include <drm/drm_edid.h>
 #else
@@ -178,6 +179,7 @@ image_blit(struct dlfb_data *dev_info, int x, int y, int width, int height,
 	int i, j, base;
 	int rem = width;
 	int ret;
+	uint32_t be_dev_addr;
 
 	int firstdiff, thistime;
 
@@ -249,16 +251,13 @@ image_blit(struct dlfb_data *dev_info, int x, int y, int width, int height,
 
 				if (end_of_rle <
 				    bufptr + 6 + 2 * (thistime - firstdiff)) {
+					be_dev_addr = htonl(base + (firstdiff * 2));
+
 					bufptr[0] = 0xAF;
 					bufptr[1] = 0x69;
-
-					bufptr[2] =
-					    (char)((base +
-						    firstdiff * 2) >> 16);
-					bufptr[3] =
-					    (char)((base + firstdiff * 2) >> 8);
-					bufptr[4] =
-					    (char)(base + firstdiff * 2);
+					bufptr[2] = (char)(be_dev_addr >> 8);
+					bufptr[3] = (char)(be_dev_addr >> 16);
+					bufptr[4] = (char)(be_dev_addr >> 24);
 					bufptr[5] = thistime - firstdiff;
 
 					bufptr = end_of_rle;
@@ -267,14 +266,11 @@ image_blit(struct dlfb_data *dev_info, int x, int y, int width, int height,
 					// fallback to raw (or some other encoding?)
 					*bufptr++ = 0xAF;
 					*bufptr++ = 0x68;
-
-					*bufptr++ =
-					    (char)((base +
-						    firstdiff * 2) >> 16);
-					*bufptr++ =
-					    (char)((base + firstdiff * 2) >> 8);
-					*bufptr++ =
-					    (char)(base + firstdiff * 2);
+					be_dev_addr = htonl(base + (firstdiff * 2));
+					
+					*bufptr++ = (char)(be_dev_addr >> 8);
+					*bufptr++ = (char)(be_dev_addr >> 16);
+					*bufptr++ = (char)(be_dev_addr >> 24);
 					*bufptr++ = thistime - firstdiff;
 					// PUT COMPRESSION HERE
 					for (j = firstdiff * 2;
@@ -324,6 +320,7 @@ draw_rect(struct dlfb_data *dev_info, int x, int y, int width, int height,
 	    (((((red) & 0xF8) | ((green) >> 5)) & 0xFF) << 8) +
 	    (((((green) & 0x1C) << 3) | ((blue) >> 3)) & 0xFF);
 	int rem = width;
+	uint32_t be_dev_addr;
 
 	char *bufptr;
 
@@ -362,13 +359,14 @@ draw_rect(struct dlfb_data *dev_info, int x, int y, int width, int height,
 						  bufptr - dev_info->buf);
 				bufptr = dev_info->buf;
 			}
+			be_dev_addr = htonl(base);
 
 			*bufptr++ = 0xAF;
 			*bufptr++ = 0x69;
 
-			*bufptr++ = (char)(base >> 16);
-			*bufptr++ = (char)(base >> 8);
-			*bufptr++ = (char)(base);
+			*bufptr++ = (char)(be_dev_addr >> 8);
+			*bufptr++ = (char)(be_dev_addr >> 16);
+			*bufptr++ = (char)(be_dev_addr >> 24);
 
 			if (rem > 255) {
 				*bufptr++ = 255;
@@ -407,6 +405,7 @@ copyarea(struct dlfb_data *dev_info, int dx, int dy, int sx, int sy,
 	int source;
 	int rem;
 	int i, ret;
+	uint32_t be_dev_addr;
 
 	char *bufptr;
 
@@ -445,18 +444,22 @@ copyarea(struct dlfb_data *dev_info, int dx, int dy, int sx, int sy,
 				bufptr = dev_info->buf;
 			}
 
+			be_dev_addr = htonl(base);
+
 			*bufptr++ = 0xAF;
 			*bufptr++ = 0x6A;
 
-			*bufptr++ = (char)(base >> 16);
-			*bufptr++ = (char)(base >> 8);
-			*bufptr++ = (char)(base);
+			*bufptr++ = (char)(be_dev_addr >> 8);
+			*bufptr++ = (char)(be_dev_addr >> 16);
+			*bufptr++ = (char)(be_dev_addr >> 24);
+
+			be_dev_addr = htonl(source);
 
 			if (rem > 255) {
 				*bufptr++ = 255;
-				*bufptr++ = (char)(source >> 16);
-				*bufptr++ = (char)(source >> 8);
-				*bufptr++ = (char)(source);
+				*bufptr++ = (char)(be_dev_addr >> 8);
+				*bufptr++ = (char)(be_dev_addr >> 16);
+				*bufptr++ = (char)(be_dev_addr >> 24);
 
 				rem -= 255;
 				base += 255 * 2;
@@ -464,9 +467,9 @@ copyarea(struct dlfb_data *dev_info, int dx, int dy, int sx, int sy,
 
 			} else {
 				*bufptr++ = rem;
-				*bufptr++ = (char)(source >> 16);
-				*bufptr++ = (char)(source >> 8);
-				*bufptr++ = (char)(source);
+				*bufptr++ = (char)(be_dev_addr >> 8);
+				*bufptr++ = (char)(be_dev_addr >> 16);
+				*bufptr++ = (char)(be_dev_addr >> 24);
 
 				base += rem * 2;
 				source += rem * 2;
