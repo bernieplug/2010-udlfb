@@ -380,8 +380,13 @@ draw_rect(struct dlfb_data *dev_info, int x, int y, int width, int height,
 				rem = 0;
 			}
 
+#ifdef _BIG_ENDIAN
+			*bufptr++ = (char)(col);
+			*bufptr++ = (char)(col >> 8);
+#else
 			*bufptr++ = (char)(col >> 8);
 			*bufptr++ = (char)(col);
+#endif
 
 		}
 
