@@ -490,7 +490,7 @@ int image_blit(struct dlfb_data *dev, int x, int y,
 		const int line_offset = dev->info->fix.line_length * i;
 		const int byte_offset = line_offset + (x * BPP);
 
-		dlfb_render_hline(dev, &urb, (char*) dev->info->fix.smem_start,
+		dlfb_render_hline(dev, &urb, (char*) dev->info->screen_base,
 				  &cmd, byte_offset, width * BPP,
 				  &bytes_identical, &bytes_sent);
 	}
@@ -1044,7 +1044,7 @@ static void dlfb_dpy_deferred_io(struct fb_info *info,
 
 	/* walk the written page list and render each to device */
 	list_for_each_entry(cur, &fbdefio->pagelist, lru) {
-		dlfb_render_hline(dev, &urb, (char*) info->fix.smem_start,
+		dlfb_render_hline(dev, &urb, (char*) info->screen_base,
 				  &cmd, cur->index << PAGE_SHIFT,
 				  PAGE_SIZE, &bytes_identical, &bytes_sent);
 		bytes_rendered += PAGE_SIZE;
@@ -1155,9 +1155,14 @@ static int dlfb_probe(struct usb_interface *interface,
 
 	info->screen_base = videomemory;
 	info->fix.smem_len = PAGE_ALIGN(videomemorysize);
-	info->fix.smem_start = (unsigned long) videomemory;
-	info->flags =
-	    FBINFO_DEFAULT | FBINFO_READS_FAST | FBINFO_HWACCEL_IMAGEBLIT;
+	info->flags = FBINFO_DEFAULT |
+		FBINFO_READS_FAST | /* faster console scroll. Not confirmed */
+		FBINFO_MODULE | /* console won't use us for showing logo */
+#ifdef FBINFO_VERTFB
+		FBINFO_VIRTFB | /* hint we have vmalloc'd framebuffer */
+#endif
+		FBINFO_MISC_ALWAYS_SETPAR | /* console always calls setpar() */
+		FBINFO_HWACCEL_IMAGEBLIT;
 
 	/*
 	 * Second framebuffer copy, mirroring the state of the framebuffer
