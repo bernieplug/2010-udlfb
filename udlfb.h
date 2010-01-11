@@ -49,6 +49,18 @@ struct dlfb_data {
 #define NR_USB_REQUEST_I2C_SUB_IO 0x02
 #define NR_USB_REQUEST_CHANNEL 0x12
 
+#define MAX_CMD_PIXELS		256
+#define MIN_RLX16_PIX_BYTES     2 /* must render at least 1 raw pix */
+#define RLX16_HEADER_BYTES	7
+#define MIN_RLX16_CMD_BYTES	(RLX16_HEADER_BYTES + MIN_RLX_PIX_BYTES)
+#define MIN_RLX8_PIX_BYTES      1
+#define RLX8_HEADER_BTYES	7
+#define MIN_RLX8_CMD_BYTES	(RLX8_HEADER_BYTES + MIN_RLX_PIX_BYTES)
+
+/* returns max # of pixels that will fit, worst case, in remaining cmd buffer */
+#define max_cmd16_pixels(s,e) (RLX16_HEADER_BYTES + ((e-s)/2))
+#define max_cmd8_pixels(s,e) (RLX8_HEADER_BYTES + e - s)
+
 /* -BULK_SIZE as per usb-skeleton. Can we get full page and avoid overhead? */
 #define BULK_SIZE 512
 #define MAX_TRANSFER (PAGE_SIZE*16 - BULK_SIZE)

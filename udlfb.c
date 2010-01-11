@@ -277,11 +277,6 @@ MODULE_DEVICE_TABLE(usb, id_table);
 
 static struct usb_driver dlfb_driver;
 
-#define BPP                     2
-#define MAX_CMD_PIXELS		255
-#define MIN_RLX_PIX_BYTES       4
-#define MIN_RLX_CMD_BYTES	(7 + MIN_RLX_PIX_BYTES)
-
 #define MIN(a,b) ((a)>(b)?(b):(a))
 
 /*
@@ -326,8 +321,73 @@ static int trim_hline(const u8* bback, const u8 **bfront, int *width_bytes)
 	return (identical * sizeof(unsigned long));
 }
 
+static u8 *rle_compress16(const u16 *src, u8* dst, const u16* const src_end,
+			const u8* const dst_end) {
+	u16 pix;
+	u16* src_start;
+
+	/* WARN_ON(src_end - src > 256); */
+
+	while ((src < src_end) && (dst < dst_end)) {
+		src_start = src;
+		pix = *src++;
+
+		while ((src < src_end) && (*src == pix))
+			src++;
+
+		*dst++ = (src - src_start) & 0xFF;
+		(u16*) *dst = cpu_to_le16(pix);
+		dst += 2;
+	}
+
+	return dst;
+}
+
+static rle_compress32(u32 *src, u8 *dst16_ptr, u8 *dst8_ptr, int rem)
+{
+	u16 pix16, prev16;
+	u8  pix8, prev8;
+	u8* dst16 = *dst16_ptr;
+	u8* dst8 = *dst8_ptr;
+	u32* start16 = src;
+	u32* start8 = src;
+	u32* src_end = src + rem;
+
+	pix16 = RGB565(*src);
+	pix8 = RGB323(*src);
+	src++;
+
+	/* We process all pixels, rather than check 16 & 8 ends */
+	while (src < src_end) {
+		prev16 = pix16;
+		prev8 = pix8;
+		pix16 = RGB565(*src);
+		pix8 = RGB323(*src);
+		src++;
+
+		if (unlikely(pix8 != prev8)) {
+			*dst8++ = src-start8;
+			*dst8 = prev8;
+			start8 = src;
+		}
+
+		if (unlikely(pix16 != prev16)) {
+			*dst16++ = src-start16;
+			(u16*) *dst16 = cpu_to_le16(prev16);
+			dst16 += 2;
+			start16 = src;
+		}
+	}
+
+	*dst16_ptr = dst_16;
+	*dst8_ptr = dst_8;
+
+	return;
+}
+
+
 /*
-Render a command stream for an encoded horizontal line segment of pixels.
+Render a command stream for an encoded horizontal line segment of 565 pixels.
 The fundamental building block of rendering for current Displaylink devices.
 
 A command buffer holds several commands.
@@ -347,7 +407,7 @@ A single command can transmit a maximum of 256 pixels,
 regardless of the compression ratio (protocol design limit).
 To the hardware, 0 for a size byte means 256
 */
-static void render_hline(
+static void render_hline_16(
 	const uint16_t* *pixel_start_ptr,
 	const uint16_t*	const pixel_end,
 	uint32_t *device_address_ptr,
@@ -359,7 +419,7 @@ static void render_hline(
 	uint8_t* cmd = *command_buffer_ptr;
 
 	while ((pixel_end > pixel) &&
-	       (cmd_buffer_end - MIN_RLX_CMD_BYTES > cmd))
+	       (cmd_buffer_end - MIN_RLX16_CMD_BYTES > cmd))
 	{
 		uint8_t *raw_pixels_count_byte = 0;
 		uint8_t *cmd_pixels_count_byte = 0;
@@ -455,6 +515,188 @@ static void render_hline(
 
 	return;
 }
+
+/*
+ * XRGB8888 render function
+ * Chooses to render to separate command buffers (urbs) for the separate
+ * 16 and 8 bit framebuffers on the device. Can stop processing on any
+ * pixel, and pick up with a later call with a different urb buffer
+ * returns # of pixels rendered
+ */
+static int render_hline_32(
+	const u32* pixel,
+	int line_pix_cnt,
+	const u32 hw_addr16,
+	u8* *cmd16,
+	const u8* const cmd16_end,
+	const u32 hw_addr8,
+	u8* *cmd8,
+	const u8* const cmd8_end)
+{
+	while (line_pix_cnt)
+	{
+		u8 *rawlen16_byte;
+		u8 *rawlen8_byte;
+		const u32* pixel_end;
+
+		/* process as many pixels as we can in one loop */
+		cmd_pix_cnt = min(min(min(MAX_CMD_PIXELS, line_pix_cnt),
+			    max_cmd16_pixels(*cmd16, cmd16_end),
+			    max_cmd8_pixels(*cmd8, cmd8_end)));
+
+		if (unlikely(cmd_pix_cnt <= 0))
+			break;
+
+		/* pixel_end points just past end of input data */
+		pixel_end = pixel + cmd_pix_cnt;
+
+		/* a command header preceeds (compressed) pixels */
+		pix16 = (u16*) (*cmd16 + RLX16_HEADER_BYTES);
+		pix8 = *cmd8 + RLX8_HEADER_BYTES;
+
+		/* last byte of header is count of raw span */
+		rawlen16_byte = ((u8*)pix16) - 1;
+		rawlen8_byte = ((u8*)pix8) - 1;
+
+		/* keep track of start, to fill in count of raw span */
+		rawstart16 = pixel;
+		rawstart8 = pixel;
+
+		/* handle first pixel */
+		col16 = RGB565(pixel);
+		col8 = RGB323(pixel);
+		*pix16++ = cpu_to_le16(col16);
+		*pix8++ = col8;
+		pixel++;
+
+		while (pixel < pixel_end) {
+			prev_col16 = col16;
+			prev_col8 = col8;
+
+			col16 = RGB565(*pixel);
+			col8 = RGB323(*pixel);
+
+			switch(state16) {
+			raw:
+				if (likely(col16 != prev_col16)) {
+					*pix16++ = cpu_to_le16(col16);
+				} else {
+					*rawlen16_byte = pixel - rawstart16;
+					state16 = rl;
+					repeat16 = 2;
+				}
+				break;
+			rl:
+				if (likely(col16 == prev_col16)) {
+					repeat16++;
+				} else {
+					state16 = raw;
+				}
+				break;
+			}
+
+			switch(state8) {
+			raw:
+			rl:
+			}
+			index++;
+		}
+
+		uint8_t *raw_pixels_count_byte = 0;
+		uint8_t *cmd_pixels_count_byte = 0;
+		const uint16_t *raw_pixel_start = 0;
+		const uint16_t *cmd_pixel_start, *cmd_pixel_end = 0;
+		const uint32_t be_dev_addr = htonl(dev_addr);
+
+		*cmd++ = 0xAF;
+		*cmd++ = 0x6B;
+		*cmd++ = (uint8_t) ((be_dev_addr >> 8) & 0xFF);
+		*cmd++ = (uint8_t) ((be_dev_addr >> 16) & 0xFF);
+		*cmd++ = (uint8_t) ((be_dev_addr >> 24) & 0xFF);
+
+		cmd_pixels_count_byte = cmd++; /*  we'll know this later */
+		cmd_pixel_start = pixel;
+
+		raw_pixels_count_byte = cmd++; /*  we'll know this later */
+		raw_pixel_start = pixel;
+
+		cmd_pixel_end = pixel +
+			MIN(pixel_end - pixel, MAX_CMD_PIXELS + 1);
+
+		while ((pixel < cmd_pixel_end) &&
+		       (cmd_buffer_end - MIN_RLX_PIX_BYTES > cmd))
+		{
+			const uint16_t* const repeating_pixel = pixel;
+			const uint16_t be_pixel = htons(*pixel);
+
+			*cmd++ = (be_pixel) & 0xFF;
+			*cmd++ = (be_pixel >> 8) & 0xFF;
+			pixel++;
+
+			while ((pixel < cmd_pixel_end)
+			       && (*pixel == *repeating_pixel))
+			{
+				pixel++;
+			}
+
+			if (pixel > repeating_pixel + 2)
+			{
+				/* We've got (to the end of) an RLE span worth
+				 * encoding go back and finalize length of last
+				 * raw span
+				 */
+
+				*raw_pixels_count_byte = ((repeating_pixel -
+						raw_pixel_start) + 1) & 0xFF;
+				/*
+				 * Immediately following the end of raw data
+				 * is a byte telling how many additional times
+				 * to repeat the last raw pixel
+				 */
+				 *cmd++ = ((pixel - repeating_pixel)-1) & 0xFF;
+
+				 /* Start a new raw span */
+				 raw_pixel_start = pixel;
+
+				 /*
+				  * hardware expects next byte to be number of
+				  * raw pixels in the next span. We don't know
+				  * that yet, fill in later
+				  */
+				 raw_pixels_count_byte = cmd++;
+
+			} else {
+				/* Back up and process as raw pixels */
+				pixel = repeating_pixel + 1;
+			}
+
+		}
+
+		if (pixel > raw_pixel_start)
+		{
+			/* finalize last RAW span */
+			*raw_pixels_count_byte = (pixel-raw_pixel_start) & 0xFF;
+		}
+
+		*cmd_pixels_count_byte = (pixel - cmd_pixel_start) & 0xFF;
+		dev_addr += (pixel - cmd_pixel_start) * 2;
+	}
+
+	if (cmd_buffer_end <= MIN_RLX_CMD_BYTES + cmd)
+	{
+		/* Fill leftover bytes with no-ops */
+		if (cmd_buffer_end > cmd)
+			memset(cmd, 0xAF, cmd_buffer_end - cmd);
+		cmd = (uint8_t*) cmd_buffer_end;
+	}
+
+	*command_buffer_ptr = cmd;
+	*pixel_start_ptr = pixel;
+	*device_address_ptr = dev_addr;
+
+	return;
+}
+
 
 int image_blit(struct dlfb_data *dev, int x, int y,
 	       int width, int height, char *data)
