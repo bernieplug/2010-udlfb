@@ -32,10 +32,10 @@
 #include <linux/uaccess.h>
 #include <linux/usb.h>
 
-#include "edid.h"
 
 #define NR_USB_REQUEST_I2C_SUB_IO 0x02
 #define NR_USB_REQUEST_CHANNEL 0x12
+#define EDID_LENGTH 128
 
 struct dlfb_dev {
        struct usb_device *udev;
@@ -46,13 +46,13 @@ struct dlfb_dev {
 };
 
 #define VEND_DISPLAYLINK       0x17e9
-#define PROD_K08               0x0141
 
 static struct usb_device_id dlfb_id_table[] = {
-       { USB_DEVICE(VEND_DISPLAYLINK, PROD_K08) },
-       { }
+	{.idVendor = 0x17e9, .match_flags = USB_DEVICE_ID_MATCH_VENDOR,},
+	{},
 };
 MODULE_DEVICE_TABLE(usb, dlfb_id_table);
+
 
 static struct fb_fix_screeninfo dlfb_fix = {
        .id =           "displaylinkfb",
