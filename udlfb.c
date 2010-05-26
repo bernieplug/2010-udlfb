@@ -747,20 +747,24 @@ static int dlfb_ops_ioctl(struct fb_info *info, unsigned int cmd,
 
 	struct dlfb_data *dev = info->par;
 	struct dloarea *area = NULL;
+	struct fb_rect *rect = NULL;
+	int result = 0;
 
 	if (!atomic_read(&dev->usb_active))
 		return 0;
 
-	/* TODO: Update X server to get this from sysfs instead */
-	if (cmd == DLFB_IOCTL_RETURN_EDID) {
+	switch(cmd) {
+
+	/* TODO: Deprecate. X Server shouldn't query EDID directly */
+	case DLFB_IOCTL_RETURN_EDID: {
 		char *edid = (char *)arg;
 		if (copy_to_user(edid, dev->edid, sizeof(dev->edid)))
 			return -EFAULT;
-		return 0;
+		break;
 	}
 
 	/* TODO: Help propose a standard fb.h ioctl to report mmap damage */
-	if (cmd == DLFB_IOCTL_REPORT_DAMAGE) {
+	case DLFB_IOCTL_REPORT_DAMAGE:
 
 		area = (struct dloarea *)arg;
 
@@ -781,9 +785,35 @@ static int dlfb_ops_ioctl(struct fb_info *info, unsigned int cmd,
 		dlfb_handle_damage(dev, area->x, area->y, area->w, area->h,
 			   info->screen_base);
 		atomic_inc(&dev->damage_count);
+
+		break;
+
+	/* (proposed) standard fbdev damage ioctl */
+	case FBIOPUT_DAMAGE:
+
+		rect = (struct fb_rect *)arg;
+
+		if ((((rect->y + rect->height) * info->fix.line_length) +
+		     ((rect->x + rect->width) * BPP)) > info->fix.smem_len)
+		{
+			result = -EFAULT;
+			break;
+		}
+
+		atomic_set(&dev->use_defio, 0);
+
+		dlfb_handle_damage(dev, rect->x, rect->y, rect->width,
+				   rect->height, info->screen_base);
+		atomic_inc(&dev->damage_count);
+
+		break;
+	default:
+		dl_err("Unknown IOCTL received: %d 0x%x\n", cmd, cmd);
+		result = -EINVAL;
+		break;
 	}
 
-	return 0;
+	return result;
 }
 
 /* taken from vesafb */

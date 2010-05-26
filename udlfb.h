@@ -16,6 +16,18 @@ struct dloarea {
 	int x2, y2;
 };
 
+/*
+ * Proposed standard damage interface
+ * Will live in fb.h when or if proposal is accepted
+ */
+struct fb_rect {
+	u32 x;
+	u32 y;
+	u32 width;
+	u32 height;
+};
+#define FBIOPUT_DAMAGE _IOW('F', 0x1A, struct fb_rect)
+
 struct urb_node {
 	struct list_head entry;
 	struct dlfb_data *dev;
