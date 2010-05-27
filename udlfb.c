@@ -1,18 +1,14 @@
 /*****************************************************************************
- *                          DLFB Kernel Driver                               *
- *                            Version 0.4 (udlfb)                            *
- *             (C) 2009 Roberto De Ioris <roberto@unbit.it>                  *
- *                                                                           *
- *     This file is licensed under the GPLv2. See COPYING in the package.    *
- * Based on the amazing work of Florian Echtler and libdlo 0.1               *
- *                                                                           *
- *                                                                           *
- * xx.11.09 release 0.4 merge 0.3 work back into udlfb for kernel tree       *
- * 24.06.09 release 0.3 as displylink-mod (resolution manager, new ioctls)   *
- * 10.06.09 release 0.2.3 (edid ioctl, fallback for unsupported modes)       *
- * 05.06.09 release 0.2.2 (real screen blanking, rle compression, double buffer) *
- * 31.05.09 release 0.2                                                      *
- * 22.05.09 First public (ugly) release                                      *
+ *                          FBDisplaylink Kernel Driver
+ *                            Version 0.1
+ *             (C) 2009 Roberto De Ioris <roberto@unbit.it>
+ *
+ *     This file is licensed under the GPLv2. See COPYING in the package.
+ * Based on libdlo, udlfb and displaylink-mod
+ *
+ *
+ * 19.12.09 intial version from udlfb 0.4
+ *
  *****************************************************************************/
 
 #include <linux/module.h>
@@ -25,29 +21,33 @@
 #include <linux/mutex.h>
 #include <linux/vmalloc.h>
 #include <linux/version.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,30)
-#include <drm/drm_edid.h>
-#else
+
 #include "drm_edid.h"
-#endif
+#include "FBDisplaylink.h"
 
-#include "udlfb.h"
+#define DRIVER_VERSION "FBDisplaylink 0.1"
+//#define USE_FAKE_EDID 1
 
-#define DRIVER_VERSION "DLFB 0.4"
+/* Memory Management  ------------------------------------------------------------------*/
 
-/* memory functions taken from vfb */
-
+/*
+ * Virtual memory functions
+ */
 static void *rvmalloc(unsigned long size)
 {
 	void *mem;
 	unsigned long adr;
 
+	/* Make the size a multiple of the page size */
 	size = PAGE_ALIGN(size);
+
+	/* Allocate memory */
 	mem = vmalloc_32(size);
 	if (!mem)
 		return NULL;
 
-	memset(mem, 0, size);	/* Clear the ram out, no junk to the user */
+	/* initialise buffer */
+	memset(mem, 0, size);
 	adr = (unsigned long)mem;
 	while (size > 0) {
 		SetPageReserved(vmalloc_to_page((void *)adr));
@@ -74,6 +74,18 @@ static void rvfree(void *mem, unsigned long size)
 	vfree(mem);
 }
 
+
+
+/** Map the kernel allocated memory into user space.
+ *
+ *  @param  info  Pointer to @an fb_info structure.
+ *  @param  vma  Pointer to @an vm_area_struct  structure.
+ *
+ *  @return  Return code, zero for no error.
+ *
+ *  This call will map the virtualk memory area vma into user.
+ *
+ */
 static int dlfb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 {
 	unsigned long start = vma->vm_start;
@@ -105,6 +117,7 @@ static int dlfb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 	return 0;
 
 }
+
 
 /* ioctl structure */
 
@@ -166,7 +179,7 @@ Next step is huffman compression.
 */
 
 static int
-image_blit(struct dlfb_data *dev_info, int x, int y, int width, int height,
+image_blit(struct dlfb_device_context *dev_info, int x, int y, int width, int height,
 	   char *data)
 {
 
@@ -304,7 +317,7 @@ image_blit(struct dlfb_data *dev_info, int x, int y, int width, int height,
 }
 
 static int
-draw_rect(struct dlfb_data *dev_info, int x, int y, int width, int height,
+draw_rect(struct dlfb_device_context *dev_info, int x, int y, int width, int height,
 	  unsigned char red, unsigned char green, unsigned char blue)
 {
 
@@ -390,7 +403,7 @@ draw_rect(struct dlfb_data *dev_info, int x, int y, int width, int height,
 }
 
 static int
-copyarea(struct dlfb_data *dev_info, int dx, int dy, int sx, int sy,
+copyarea(struct dlfb_device_context *dev_info, int dx, int dy, int sx, int sy,
 	 int width, int height)
 {
 	int base;
@@ -479,7 +492,7 @@ copyarea(struct dlfb_data *dev_info, int dx, int dy, int sx, int sy,
 static void dlfb_copyarea(struct fb_info *info, const struct fb_copyarea *area)
 {
 
-	struct dlfb_data *dev = info->par;
+	struct dlfb_device_context *dev = info->par;
 
 	mutex_lock(&dev->fb_mutex);
 
@@ -493,13 +506,13 @@ static void dlfb_copyarea(struct fb_info *info, const struct fb_copyarea *area)
 
 	mutex_unlock(&dev->fb_mutex);
 
-	/* printk("COPY AREA %d %d %d %d %d %d !!!\n", area->dx, area->dy, area->sx, area->sy, area->width, area->height); */
+	// printk("COPY AREA %d %d %d %d %d %d !!!\n", area->dx, area->dy, area->sx, area->sy, area->width, area->height);
 
 }
 
 static void dlfb_imageblit(struct fb_info *info, const struct fb_image *image)
 {
-	struct dlfb_data *dev = info->par;
+	struct dlfb_device_context *dev = info->par;
 
 	mutex_lock(&dev->fb_mutex);
 
@@ -508,12 +521,12 @@ static void dlfb_imageblit(struct fb_info *info, const struct fb_image *image)
 	if (dev->udev == NULL)
 		return;
 
-	/* printk("IMAGE BLIT (1) %d %d %d %d DEPTH %d {%p}!!!\n", image->dx, image->dy, image->width, image->height, image->depth, dev->udev); */
+	// printk("IMAGE BLIT (1) %d %d %d %d DEPTH %d {%p}!!!\n", image->dx, image->dy, image->width, image->height, image->depth, dev->udev);
 
 	cfb_imageblit(info, image);
 
-	image_blit(dev, image->dx, image->dy, image->width, image->height,
-		       info->screen_base);
+	//image_blit(dev, image->dx, image->dy, image->width, image->height,
+	//	       info->screen_base);
 
 	mutex_unlock(&dev->fb_mutex);
 
@@ -525,7 +538,7 @@ static void dlfb_fillrect(struct fb_info *info,
 {
 
 	unsigned char red, green, blue;
-	struct dlfb_data *dev = info->par;
+	struct dlfb_device_context *dev = info->par;
 
 	mutex_lock(&dev->fb_mutex);
 
@@ -542,17 +555,19 @@ static void dlfb_fillrect(struct fb_info *info,
 
 	mutex_unlock(&dev->fb_mutex);
 
-	/* printk("FILL RECT %d %d !!!\n", region->dx, region->dy); */
+	// printk("FILL RECT %d %d !!!\n", region->dx, region->dy);
 
 }
 
 static int dlfb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 {
 
-	struct dlfb_data *dev_info = info->par;
+	struct dlfb_device_context *dev_info = info->par;
 	struct dloarea *area = NULL;
 	struct dlores *res = NULL;
 	char *name;
+
+	// printk("dlfb_ioctl\n" );
 
 	if (dev_info->udev == NULL) {
 		return -EINVAL;
@@ -650,7 +665,7 @@ dlfb_setcolreg(unsigned regno, unsigned red, unsigned green,
 
 static int dlfb_release(struct fb_info *info, int user)
 {
-	struct dlfb_data *dev_info = info->par;
+	struct dlfb_device_context *dev_info = info->par;
 
 	BUG_ON(dev_info == NULL);
 
@@ -658,19 +673,19 @@ static int dlfb_release(struct fb_info *info, int user)
 	if (user == 0) {
 		return 0;
 	}
-		
+
 	//printk("releasing displaylink framebuffer...\n");
 	mutex_lock(&dev_info->fb_mutex);
 
 	atomic_dec(&dev_info->fb_count);
 
-	//printk("release fb count: %d\n", atomic_read(&dev_info->fb_count)); 
+	//printk("release fb count: %d\n", atomic_read(&dev_info->fb_count));
 
 	if (atomic_read(&dev_info->fb_count) == 0 && dev_info->udev == NULL) {
 		dlfb_destroy_framebuffer(dev_info);
 		mutex_unlock(&dev_info->fb_mutex);
 		kfree(dev_info);
-		return 0 ;	
+		return 0 ;
 	}
 
 	image_blit(dev_info, 0, 0, info->var.xres, info->var.yres,
@@ -683,7 +698,7 @@ static int dlfb_release(struct fb_info *info, int user)
 
 static int dlfb_blank(int blank_mode, struct fb_info *info)
 {
-	struct dlfb_data *dev_info = info->par;
+	struct dlfb_device_context *dev_info = info->par;
 	char *bufptr = dev_info->buf;
 
 	bufptr = dlfb_set_register(bufptr, 0xFF, 0x00);
@@ -696,6 +711,8 @@ static int dlfb_blank(int blank_mode, struct fb_info *info)
 
 	dlfb_bulk_msg(dev_info, bufptr - dev_info->buf);
 
+	printk("displaylink dlfb_blank\n" );
+
 	return 0;
 }
 
@@ -703,7 +720,7 @@ static int dlfb_blank(int blank_mode, struct fb_info *info)
 
 static int dlfb_open(struct fb_info *info, int user) {
 
-	struct dlfb_data *dev = info->par;
+	struct dlfb_device_context *dev = info->par;
 
 	BUG_ON(dev == NULL);
 
@@ -725,26 +742,26 @@ static int dlfb_open(struct fb_info *info, int user) {
 
 	atomic_inc(&dev->fb_count);
 
-	//printk("fb count: %d\n", atomic_read(&dev->fb_count)); 
+	//printk("fb count: %d\n", atomic_read(&dev->fb_count));
 
 	mutex_unlock(&dev->fb_mutex);
 
 	return 0;
-	
+
 }
 
 
 
 static int dlfb_setpar(struct fb_info *info) {
-	
-	struct dlfb_data *dev = info->par;
-	
+
+	struct dlfb_device_context *dev = info->par;
+
 	BUG_ON(dev == NULL);
 
 	if (dev->udev == NULL)
                 return -EINVAL;
 
-	printk("setting hardware to %d %d\n", info->var.xres, info->var.yres);
+	printk("displaylink setting hardware to %d %d\n", info->var.xres, info->var.yres);
 
 	dlfb_set_video_mode(dev, 0, info->var.xres, info->var.yres, 0);
 
@@ -757,7 +774,7 @@ static int dlfb_setpar(struct fb_info *info) {
 
 static int dlfb_checkvar(struct fb_var_screeninfo *var, struct fb_info *info)
 {
-	struct dlfb_data *dev = info->par;
+	struct dlfb_device_context *dev = info->par;
 	struct edid *edid ;
 	struct detailed_timing *best_edid ;
 	struct std_timing *std_edid ;
@@ -795,10 +812,10 @@ static int dlfb_checkvar(struct fb_var_screeninfo *var, struct fb_info *info)
 			return 0;
 		}
 	}
-	
-	
+
+
 	return -EINVAL;
-	
+
 }
 
 static struct fb_ops dlfb_ops = {
@@ -818,59 +835,68 @@ static struct fb_ops dlfb_ops = {
 static int
 dlfb_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
-	struct dlfb_data *dev;
+	struct dlfb_device_context *dev;
 
 	int ret;
 	int mode = 0;
 
+	/* Allocate USB device conrtext */
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (dev == NULL) {
-		printk("cannot allocate dev structure.\n");
+		printk("cannot allocate device context structure.\n");
 		return -ENOMEM;
 	}
 
+	/* Initialise access mutexes */
 	mutex_init(&dev->bulk_mutex);
 	mutex_init(&dev->fb_mutex);
 
+	/* store USB device details in context */
 	dev->udev = usb_get_dev(interface_to_usbdev(interface));
 	dev->interface = interface;
 
-	printk("DisplayLink device attached\n");
+	printk("\n\nFBDisplayLink device attached\n\n");
 
 	/* add framebuffer info to usb interface */
 	usb_set_intfdata(interface, dev);
 
+	/* Allocate USB command buffer */
 	dev->buf = kmalloc(BUF_SIZE, GFP_KERNEL);
 	/* usb_buffer_alloc(dev->udev, BUF_SIZE , GFP_KERNEL, &dev->tx_urb->transfer_dma); */
-
 	if (dev->buf == NULL) {
 		printk("unable to allocate memory for dlfb commands\n");
 		goto out;
 	}
 	dev->bufend = dev->buf + BUF_SIZE;
 
+	/* set up USB communications */
 	dev->tx_urb = usb_alloc_urb(0, GFP_KERNEL);
 	usb_fill_bulk_urb(dev->tx_urb, dev->udev,
 			  usb_sndbulkpipe(dev->udev, 1), dev->buf, 0,
 			  dlfb_bulk_callback, dev);
 
+	/* set device name */
 	if (strlen(dev->udev->product) > 63) {
-                memcpy(dev->name, dev->udev->product, 63);
-        }
-        else {
-                memcpy(dev->name, dev->udev->product, strlen(dev->udev->product));
-        }
+    	memcpy(dev->name, dev->udev->product, 63);
+    } else {
+     	memcpy(dev->name, dev->udev->product, strlen(dev->udev->product));
+    }
 
+	/* Get attached display information */
 	dlfb_edid(dev);
+
+	/* Set up general Display link device configuration */
 	ret = dlfb_setup(dev);
 
-
+	/* Set up video mode */
 	dlfb_set_video_mode(dev, 0, 0, 0, 0);
 
-	dev->backing_buffer = kzalloc(dev->screen_size, GFP_KERNEL);
+	printk("FBDisplayLink Screen size: %d\n", dev->screen_size);
+
+	dev->backing_buffer = vmalloc(dev->screen_size);
 
 	if (!dev->backing_buffer) {
-		printk("non posso allocare il backing buffer\n");
+		printk("error allocating the back buffer\n");
 		goto out;
 	}
 
@@ -883,13 +909,14 @@ dlfb_probe(struct usb_interface *interface, const struct usb_device_id *id)
 
 	// put the green screen
 	draw_rect(dev, 0, 0, dev->info->var.xres,
-		  dev->info->var.yres, 0x30, 0xff, 0x30);
+		  dev->info->var.yres, 0xFF, 0x00, 0x00);
 
 	return 0;
 
  out:
 	usb_set_intfdata(interface, NULL);
 	usb_put_dev(dev->udev);
+	vfree(dev->backing_buffer);
 	kfree(dev);
 	return -ENOMEM;
 
@@ -914,36 +941,108 @@ static uint16_t lfsr16(uint16_t v)
 void dlfb_bulk_callback(struct urb *urb)
 {
 
-	struct dlfb_data *dev = urb->context;
+	struct dlfb_device_context *dev = urb->context;
 	complete(&dev->done);
 	//printk("displaylink BULK transfer complete %d\n", urb->actual_length);
 
 }
 
-void dlfb_edid(struct dlfb_data *dev)
+/* some hard-wired constants for checking known embedded devices with
+ * EDID data structures that'd otherwise break the framebuffer's brain
+ */
+#define EDID_MANUF0 (8)
+#define EDID_MANUF1 (9)
+#define EDID_PROD0  (10)
+#define EDID_PROD1  (11)
+
+/* nonesense bytes - substitute with values from known bad system */
+#define EDID_MANUF0_VALUE (0xFF)
+#define EDID_MANUF1_VALUE (0xFF)
+#define EDID_PROD0_VALUE  (0xFF)
+#define EDID_PROD1_VALUE  (0xFF)
+
+void dlfb_edid(struct dlfb_device_context *dev)
 {
 	int i;
 	int ret;
 	char rbuf[2];
+	unsigned char sum=0;
 
+#if defined(USE_FAKE_EDID)
+	struct edid *edid = (struct edid *) dev->edid;
+	struct detailed_timing *best_edid;;
+	char fakeedid[128] = {
+		0x00,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x04,0x21,0x55,0x03,0x01,0x00,0x00,0x00,
+		0x05,0x14,0x01,0x03,0x80,0x0C,0x09,0x7A,0x0a,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+		0x00,0x00,0x00,0x20,0x00,0x00,0x31,0x40,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,
+		0x01,0x01,0x01,0x01,0x01,0x01,0xc4,0x09,0x80,0xa0,0x20,0xe0,0x2d,0x10,0x28,0xa0,
+		0x1d,0x02,0x00,0x00,0x00,0x00,0x00,0x18,0x00,0x00,0x00,0xfd,0x00,0x37,0x41,0x1e,
+		0x2d,0x05,0x00,0x0a,0x20,0x20,0x20,0x20,0x20,0x20,0x00,0x00,0x00,0x10,0x00,0x00,
+		0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x10,
+		0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xf9
+	};
+
+	 printk("Using Fake 640x480 EDID\n");
+	 for (i = 0; i < 128; i++) {
+		 dev->edid[i] = fakeedid[i];
+	 }
+	 best_edid =  &edid->detailed_timings[0];
+	 printk("Width %d Height %d\n",EDID_GET_WIDTH(best_edid),EDID_GET_HEIGHT(best_edid) );
+
+#else
 	for (i = 0; i < 128; i++) {
                 ret =
                     usb_control_msg(dev->udev,
                                     usb_rcvctrlpipe(dev->udev, 0), (0x02),
                                     (0x80 | (0x02 << 5)), i << 8, 0xA1, rbuf, 2,
                                     0);
-                //printk("ret control msg edid %d: %d [%d]\n",i, ret, rbuf[1]);
-                dev->edid[i] = rbuf[1];
-        }
+                 dev->edid[i] = rbuf[1];
+    }
+
+	// Fixup EDID from some embedded devices - those with _no_ standard timings
+	if (dev->edid[EDID_MANUF0] == EDID_MANUF0_VALUE && dev->edid[EDID_MANUF1] == EDID_MANUF1_VALUE &&
+	    dev->edid[EDID_PROD0] == EDID_PROD0_VALUE && dev->edid[EDID_PROD1] == EDID_PROD1_VALUE)
+	{
+		printk("Embedded display found, fixing EDID\n" );
+		dev->edid[21] = 0x0D; // 12cm width
+		dev->edid[22] = 0x0A; // 9cm height
+		dev->edid[23] = 0x7A; // gamma
+
+		dev->edid[25] = 0xAE; //
+		dev->edid[26] = 0xC5; //
+		dev->edid[27] = 0xA2; //
+		dev->edid[28] = 0x57; //
+		dev->edid[29] = 0x4A; //
+		dev->edid[30] = 0x9C; //
+		dev->edid[31] = 0x25; //
+		dev->edid[32] = 0x12; //
+		dev->edid[33] = 0x50; //
+		dev->edid[34] = 0x54; //
+
+		dev->edid[35] = 0x20; // 640x480, 60 Hz
+		dev->edid[38] = 0x31; // 640
+		dev->edid[39] = 0x40; // 4:3, 60 Hz
+
+		dev->edid[66] = 0x78; // 120 mm
+		dev->edid[67] = 0x5A; // 90 mm
+
+		// Compute checksum
+		for (i = 0; i < 127; i++) {
+			sum += dev->edid[i];
+		}
+		dev->edid[127] = -sum;
+
+	}
+#endif
 
 }
 
-void dlfb_get_best_edid(struct dlfb_data *dev) {
+void dlfb_get_best_edid(struct dlfb_device_context *dev) {
 	return;
 }
 
 
-int dlfb_bulk_msg(struct dlfb_data *dev, int len)
+int dlfb_bulk_msg(struct dlfb_device_context *dev, int len)
 {
 
 	int ret;
@@ -958,6 +1057,7 @@ int dlfb_bulk_msg(struct dlfb_data *dev, int len)
 		usb_kill_urb(dev->tx_urb);
 		printk("usb timeout !!!\n");
 	}
+	//printk("FBDisplaylink dlfb_bulk_msg, requested len %d, tfr length %d\n", len, dev->tx_urb->actual_length);
 
 	return dev->tx_urb->actual_length;
 
@@ -985,6 +1085,8 @@ char *dlfb_edid_to_reg(struct detailed_timing *edid, char *bufptr, int width, in
 
 	uint16_t edid_w  ;
 	uint16_t edid_h ;
+	uint16_t edid_hSyncStart ;
+	uint16_t edid_vSyncStart ;
 	uint16_t edid_x_ds ;
 	uint16_t edid_x_de ;
 	uint16_t edid_y_ds ;
@@ -998,22 +1100,24 @@ char *dlfb_edid_to_reg(struct detailed_timing *edid, char *bufptr, int width, in
 	/* display width */
 	edid_w = EDID_GET_WIDTH(edid) ;
 	if (width!= 0) {
-		edid_w = width;	
+		edid_w = width;
 	}
 
 	/* display height */
 	edid_h  = EDID_GET_HEIGHT(edid) ;
 	if (height!= 0) {
-		edid_h = height;	
+		edid_h = height;
 	}
 
 	/* display x start/end */
 	edid_x_ds = (EDID_GET_HBLANK(edid) - EDID_GET_HSYNC(edid)) ;
 	edid_x_de = (edid_x_ds + edid_w) ;
+	edid_hSyncStart = 1;
 
 	/* display y start/end */
 	edid_y_ds = (EDID_GET_VBLANK(edid) - EDID_GET_VSYNC(edid));
 	edid_y_de = (edid_y_ds + edid_h);
+	edid_vSyncStart = 0;
 
 	/* x end count */
 	edid_x_ec = (edid_w + EDID_GET_HBLANK(edid) - 1);
@@ -1027,11 +1131,26 @@ char *dlfb_edid_to_reg(struct detailed_timing *edid, char *bufptr, int width, in
 	/* pixel clock */
 	edid_pclock = edid->pixel_clock*2;
 
+	printk("displaylink xDisplayStart %d\n", edid_x_ds);
+	printk("displaylink xDisplayEnd %d\n", edid_x_de);
+	printk("displaylink yDisplayStart %d\n", edid_y_ds);
+	printk("displaylink yDisplayEnd %d\n", edid_y_de);
+	printk("displaylink xEndCount %d\n", edid_x_ec);
+	printk("displaylink hSyncStart %d\n", edid_hSyncStart);
+	printk("displaylink hSyncEnd %d\n", edid_h_se);
+	printk("displaylink hPixels %d\n", edid_w);
+	printk("displaylink vSyncStart %d\n",edid_vSyncStart);
+	printk("displaylink vSyncEnd %d\n", edid_v_se);
+	printk("displaylink vPixels %d\n", edid_h);
+	printk("displaylink Pixel clock %d\n", edid_pclock*5);
+
 	if (freq != 0) {
 		/* calc new pixel clock based on freq */
 	}
 
+	//bufptr = dlfb_set_register(bufptr, 0xFF, 0) ;
 
+	//bufptr = dlfb_set_register(bufptr, 0x00, 0) ;
 	bufptr = dlfb_set_register_16(bufptr, 0x01, lfsr16(edid_x_ds)) ;
 	bufptr = dlfb_set_register_16(bufptr, 0x03, lfsr16(edid_x_de)) ;
 	bufptr = dlfb_set_register_16(bufptr, 0x05, lfsr16(edid_y_ds)) ;
@@ -1039,22 +1158,29 @@ char *dlfb_edid_to_reg(struct detailed_timing *edid, char *bufptr, int width, in
 
 	bufptr = dlfb_set_register_16(bufptr, 0x09, lfsr16(edid_x_ec)) ;
 
-	bufptr = dlfb_set_register_16(bufptr, 0x0B, lfsr16(1)) ;
-	bufptr = dlfb_set_register_16(bufptr, 0x0D, lfsr16(edid_h_se)) ;
+//	bufptr = dlfb_set_register_16(bufptr, 0x0B, 0x74) ;
+//	bufptr = dlfb_set_register_16(bufptr, 0x0D, 0xFFFE) ;
+	bufptr = dlfb_set_register_16(bufptr, 0x0B, lfsr16(edid_h_se)) ;
+	bufptr = dlfb_set_register_16(bufptr, 0x0D, lfsr16(edid_hSyncStart)) ;
 
 	bufptr = dlfb_set_register_16(bufptr, 0x0F, edid_w) ;
 
 	bufptr = dlfb_set_register_16(bufptr, 0x11, lfsr16(edid_y_ec)) ;
 
-	bufptr = dlfb_set_register_16(bufptr, 0x13, lfsr16(0)) ;
-	bufptr = dlfb_set_register_16(bufptr, 0x15, lfsr16(edid_v_se)) ;
+//	bufptr = dlfb_set_register_16(bufptr, 0x13, 0x83bc) ;
+//	bufptr = dlfb_set_register_16(bufptr, 0x15, 0xFFFF) ;
+	bufptr = dlfb_set_register_16(bufptr, 0x13, lfsr16(edid_v_se)) ;
+	bufptr = dlfb_set_register_16(bufptr, 0x15, lfsr16(edid_vSyncStart)) ;
 
 	bufptr = dlfb_set_register_16(bufptr, 0x17, edid_h) ;
 
 	bufptr = dlfb_set_register_le16(bufptr, 0x1B, edid_pclock) ;
+	//bufptr = dlfb_set_register(bufptr, 0x1F, 0) ;
 
 	return bufptr;
 }
+
+
 
 char *dlfb_set_register(char *bufptr, uint8_t reg, uint8_t val)
 {
@@ -1068,14 +1194,14 @@ char *dlfb_set_register(char *bufptr, uint8_t reg, uint8_t val)
 
 }
 
-int dlfb_set_video_mode(struct dlfb_data *dev, int mode, int width, int height, int freq)
+int dlfb_set_video_mode(struct dlfb_device_context *dev, int mode, int width, int height, int freq)
 {
 
 	char *bufptr;
 	int ret;
 
 	struct edid *edid = (struct edid *) dev->edid;
-	struct detailed_timing *best_edid =  &edid->detailed_timings[mode];	
+	struct detailed_timing *best_edid =  &edid->detailed_timings[mode];
 
 	if (dev->udev == NULL)
 		return 0;
@@ -1087,63 +1213,64 @@ int dlfb_set_video_mode(struct dlfb_data *dev, int mode, int width, int height, 
 
 	mutex_lock(&dev->bulk_mutex);
 
-	// set registers
+	// video registers unlock
 	bufptr = dlfb_set_register(bufptr, 0xFF, 0x00);
 
-	// set color depth
-	bufptr = dlfb_set_register(bufptr, 0x00, 0x00);
+	printk("displaylink base16 register %d\n", dev->base16);
+	printk("displaylink base8 register %d\n", dev->base8);
 
 	// set addresses
-	bufptr =
-		dlfb_set_register(bufptr, 0x20,
-		(char)(dev->base16 >> 16));
-	bufptr =
-		dlfb_set_register(bufptr, 0x21,
-		(char)(dev->base16 >> 8));
-	bufptr =
-		dlfb_set_register(bufptr, 0x22,
-		(char)(dev->base16));
+	bufptr = dlfb_set_register(bufptr, 0x20, (char)(dev->base16 >> 16));
+	bufptr = dlfb_set_register(bufptr, 0x21, (char)(dev->base16 >> 8));
+	bufptr = dlfb_set_register(bufptr, 0x22, (char)(dev->base16));
 
-	bufptr =
-		dlfb_set_register(bufptr, 0x26,
-		(char)(dev->base8 >> 16));
+	bufptr = dlfb_set_register(bufptr, 0x26, (char)(dev->base8 >> 16));
+	bufptr = dlfb_set_register(bufptr, 0x27, (char)(dev->base8 >> 8));
+	bufptr = dlfb_set_register(bufptr, 0x28, (char)(dev->base8));
 
-	bufptr =
-		dlfb_set_register(bufptr, 0x27,
-		(char)(dev->base8 >> 8));
+	// video register lock + flush
+	bufptr = dlfb_set_register(bufptr, 0xFF, 0xFF);
+	*(bufptr)++ = 0xAF;
+	*(bufptr)++ = 0xA0;
 
-	bufptr =
-		dlfb_set_register(bufptr, 0x28,
-		(char)(dev->base8));
+	ret = dlfb_bulk_msg(dev, bufptr - dev->buf);
+	printk("video base set: %d %d\n", ret, bufptr - dev->buf);
+
+
+	// start filling buffer again
+	bufptr = dev->buf;
 
 	if (width != 0) {
 		printk("displaylink setting resolution to %dx%d\n", width, height);
 	}
-	
+
+	// video registers unlock
+	//bufptr = dlfb_set_register(bufptr, 0xFF, 0x00);
+
+	// set color depth
+	bufptr = dlfb_set_register(bufptr, 0x00, 0x01);
+
+	/* Add edid values to command */
 	bufptr = dlfb_edid_to_reg(best_edid, bufptr, width, height, freq);
 
-
-	// blank
+	// blank screen
 	bufptr = dlfb_set_register(bufptr, 0x1F, 0x00);
 
-	// end registers
+	// video register lock + flush
 	bufptr = dlfb_set_register(bufptr, 0xFF, 0xFF);
+	*(bufptr)++ = 0xAF;
+	*(bufptr)++ = 0xA0;
 
-	// send
+	// send command to device
 	ret = dlfb_bulk_msg(dev, bufptr - dev->buf);
-	printk("set video mode bulk message: %d %d\n", ret,
-			       bufptr - dev->buf);
-
-	// flush
-	ret = dlfb_bulk_msg(dev, 0);
-	printk("displaylink register flush: %d\n", ret);
+	printk("set video mode bulk message: %d %d\n", ret, bufptr - dev->buf);
 
 	if (width == 0) {
 		dev->line_length = EDID_GET_WIDTH(best_edid) * (FB_BPP/8) ;
-	}
-	else {
+	} else {
 		dev->line_length = width * (FB_BPP/8) ;
 	}
+	printk("displaylink line_length: %d\n", dev->line_length);
 
 	mutex_unlock(&dev->bulk_mutex);
 
@@ -1151,25 +1278,21 @@ int dlfb_set_video_mode(struct dlfb_data *dev, int mode, int width, int height, 
 
 }
 
-int dlfb_setup(struct dlfb_data *dev) 
+int dlfb_setup(struct dlfb_device_context *dev)
 {
-
-	int ret;
+	int ret = 0;
 	unsigned char buf[4];
-
 	struct edid *edid = (struct edid *) dev->edid;
-
 	struct detailed_timing *best_edid =  &edid->detailed_timings[0] ;
 
-	ret = usb_control_msg(dev->udev,
-                                    usb_rcvctrlpipe(dev->udev, 0), (0x02),
-                                    (0x80 | (0x02 << 5)), 0, 0, buf, 4,
-                                    5000);
-
+	/* Get description from device */
+	ret = usb_control_msg(dev->udev, usb_rcvctrlpipe(dev->udev, 0),
+                          (0x02),(0x80 | (0x02 << 5)), 0, 0, buf, 4, 5000);
 	if (ret != 4) {
 		return -1 ;
 	}
 
+	/* Idenfify which type of displaylink device is attached */
 	switch ((buf[3] >> 4) & 0xF) {
 		case DL_CHIP_TYPE_BASE:
 			strcpy(dev->chiptype, "base");
@@ -1187,50 +1310,42 @@ int dlfb_setup(struct dlfb_data *dev)
 				strcpy(dev->chiptype, "unknown");
 	}
 
-	printk("found DisplayLink Chip %s\n", dev->chiptype);
+	printk("DisplayLink Chip %s found\n", dev->chiptype);
 
 	// set encryption key (null)
-        memcpy(dev->buf, STD_CHANNEL, 16);
-        ret = usb_control_msg(dev->udev, usb_sndctrlpipe(dev->udev, 0),
-		0x12, (0x02 << 5), 0, 0,
-		dev->buf, 16, 0);
+   	memcpy(dev->buf, STD_CHANNEL, 16);
+    ret = usb_control_msg(dev->udev, usb_sndctrlpipe(dev->udev, 0),
+						  0x12, (0x02 << 5), 0, 0, dev->buf, 16, 0);
 
 	printk("sent encryption null key: %d\n", ret);
 
-        dev->line_length = EDID_GET_WIDTH(best_edid) * (FB_BPP / 8);
+    dev->line_length = EDID_GET_WIDTH(best_edid) * (FB_BPP / 8);
+	dev->screen_size = EDID_GET_WIDTH(best_edid) * EDID_GET_HEIGHT(best_edid) * (FB_BPP / 8);
 
-	printk("displaylink monitor info: W(%d) H(%d) clock(%d)\n",
-		EDID_GET_WIDTH(best_edid),
-		EDID_GET_HEIGHT(best_edid),
-		best_edid->pixel_clock
-		);
-
-	dev->screen_size = EDID_GET_WIDTH(best_edid) * 
-			EDID_GET_HEIGHT(best_edid) * (FB_BPP / 8);
+	printk("displaylink monitor info: W(%d) H(%d) clock(%d) screen_size (%d)\n",
+			EDID_GET_WIDTH(best_edid), EDID_GET_HEIGHT(best_edid), best_edid->pixel_clock, dev->screen_size);
 
 	return 0;
 }
 
-int dlfb_activate_framebuffer(struct dlfb_data *dev, int mode)
+int dlfb_activate_framebuffer(struct dlfb_device_context *dev, int mode)
 {
-
 	struct fb_info *info;
 
+	/* Create framebuffer info structure */
 	info = framebuffer_alloc(sizeof(u32) * 256, &dev->udev->dev);
-
 	if (!info) {
-		printk("unable to allocate displaylink virtual framebuffer");
+		printk("unable to allocate displaylink fb_info");
 		return -ENOMEM;
 	}
 
+	/* set up framebuffer */
 	dev->info = info;
-
 	info->pseudo_palette = info->par;
 	info->par = dev;
 
-	info->flags =
-	    FBINFO_DEFAULT | FBINFO_READS_FAST | FBINFO_HWACCEL_IMAGEBLIT |
-	    FBINFO_HWACCEL_COPYAREA | FBINFO_HWACCEL_FILLRECT;
+	info->flags = FBINFO_DEFAULT | FBINFO_READS_FAST | FBINFO_HWACCEL_IMAGEBLIT |
+	    		  FBINFO_HWACCEL_COPYAREA | FBINFO_HWACCEL_FILLRECT;
 	info->fbops = &dlfb_ops;
 	info->screen_base = rvmalloc(dev->screen_size);
 
@@ -1261,7 +1376,7 @@ int dlfb_activate_framebuffer(struct dlfb_data *dev, int mode)
 
 	info->fix.smem_start = (unsigned long)info->screen_base;
 	info->fix.smem_len = PAGE_ALIGN(dev->screen_size);
-	
+
 	if (strlen(dev->udev->product) > 15) {
 		memcpy(info->fix.id, dev->udev->product, 15);
 	}
@@ -1281,6 +1396,8 @@ int dlfb_activate_framebuffer(struct dlfb_data *dev, int mode)
 	if (register_framebuffer(info) < 0)
 		goto out2;
 
+	printk("framebuffer registered\n");
+
 	return 0;
 
  out2:
@@ -1294,7 +1411,7 @@ int dlfb_activate_framebuffer(struct dlfb_data *dev, int mode)
 
 }
 
-void dlfb_destroy_framebuffer(struct dlfb_data *dev) 
+void dlfb_destroy_framebuffer(struct dlfb_device_context *dev)
 {
 
 	printk("destroying framebuffer device...\n");
@@ -1312,8 +1429,8 @@ void dlfb_destroy_framebuffer(struct dlfb_data *dev)
 
 static void dlfb_disconnect(struct usb_interface *interface)
 {
-	struct dlfb_data *dev = usb_get_intfdata(interface);
-	struct dlfb_orphaned_dev *odev;
+	struct dlfb_device_context *dev = usb_get_intfdata(interface);
+	struct dlfb_orphaned_device_context *odev;
 
 	mutex_unlock(&dev->bulk_mutex);
 
@@ -1324,7 +1441,7 @@ static void dlfb_disconnect(struct usb_interface *interface)
 
 	mutex_lock(&dev->fb_mutex);
 
-	printk("fb count: %d\n", atomic_read(&dev->fb_count)); 
+	printk("fb count: %d\n", atomic_read(&dev->fb_count));
 
 	if (atomic_read(&dev->fb_count) == 0) {
 		dlfb_destroy_framebuffer(dev);
@@ -1345,13 +1462,22 @@ static void dlfb_disconnect(struct usb_interface *interface)
 
 	mutex_unlock(&dev->fb_mutex);
 
+	/* free backing buffer */
+	vfree(dev->backing_buffer);
+
+	/* free usb command buffer */
+	kfree(dev->buf);
+
+	/* free usb device context */
 	kfree(dev);
 
 	printk("DisplayLink device disconnected\n");
 }
 
+
+
 static struct usb_driver dlfb_driver = {
-	.name = "udlfb",
+	.name = "FBDisplaylink_SC1",
 	.probe = dlfb_probe,
 	.disconnect = dlfb_disconnect,
 	.id_table = id_table,
@@ -1361,11 +1487,12 @@ static int __init dlfb_init(void)
 {
 	int res;
 
+	/* register usb device */
 	res = usb_register(&dlfb_driver);
 	if (res)
 		err("usb_register failed. Error number %d", res);
 
-	printk("VMODES initialized\n");
+	printk("FBDisplaylink_SC1 initialized\n");
 
 	return res;
 }

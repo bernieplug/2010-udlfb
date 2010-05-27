@@ -1,5 +1,5 @@
-#ifndef UDLFB_H
-#define UDLFB_H
+#ifndef FBDISPLAYLINK_H
+#define FBDISPLAYLINK_H
 
 #define FB_BPP		16
 
@@ -27,13 +27,23 @@
 #define BUF_HIGH_WATER_MARK	1024
 #define BUF_SIZE		(64*1024)
 
-struct dlfb_data {
+struct dlfb_orphaned_device_context {
+	atomic_t fb_count;
+    struct usb_device *udev;
+    struct mutex fb_mutex;
+    struct fb_info *info;
+    int screen_size;
+    int line_length;
+};
+
+struct dlfb_device_context {
 	// first members of structure must match "orphaned" struct below
 	atomic_t fb_count;
 	struct usb_device *udev;
-        struct mutex fb_mutex;
-        int screen_size;
-        int line_length;
+    struct mutex fb_mutex;
+    int screen_size;
+    int line_length;
+	
 	struct usb_interface *interface;
 	struct urb *tx_urb, *ctrl_urb;
 	struct usb_ctrlrequest dr;
@@ -52,14 +62,6 @@ struct dlfb_data {
 	int base8d;
 };
 
-struct dlfb_orphaned_dev {
-	atomic_t fb_count;
-        struct usb_device *udev;
-        struct mutex fb_mutex;
-        struct fb_info *info;
-        int screen_size;
-        int line_length;
-};
 
 struct dlfb_video_mode {
 	uint8_t col;
@@ -73,12 +75,12 @@ struct dlfb_video_mode {
 } __attribute__ ((__packed__));
 
 char *dlfb_set_register(char *bufptr, uint8_t reg, uint8_t val);
-int dlfb_bulk_msg(struct dlfb_data *dev, int len);
-void dlfb_destroy_framebuffer(struct dlfb_data *dev);
-void dlfb_edid(struct dlfb_data *dev);
-int dlfb_set_video_mode(struct dlfb_data *dev, int mode, int width, int height, int freq);
+int dlfb_bulk_msg(struct dlfb_device_context *dev, int len);
+void dlfb_destroy_framebuffer(struct dlfb_device_context *dev);
+void dlfb_edid(struct dlfb_device_context *dev);
+int dlfb_set_video_mode(struct dlfb_device_context *dev, int mode, int width, int height, int freq);
 void dlfb_bulk_callback(struct urb *urb);
-int dlfb_setup(struct dlfb_data *dev);
-int dlfb_activate_framebuffer(struct dlfb_data *dev, int mode);
+int dlfb_setup(struct dlfb_device_context *dev);
+int dlfb_activate_framebuffer(struct dlfb_device_context *dev, int mode);
 
 #endif

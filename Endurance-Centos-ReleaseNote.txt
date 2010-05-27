@@ -1,0 +1,179 @@
+DisplayLink Driver for CentOS
+=============================
+
+
+Description
+===========
+
+This software should be installed into a CentOS 5.3 system. The supplied xorg.conf
+assumes an Intel based graphics system, but there are also examples for Nvidia.
+
+
+Installation
+============
+
+Full installation
+-----------------
+
+The following steps should be taken to install the driver package:
+
+1. Copy the existing xorg.conf file
+
+  1.1. $ sudo mv /etc/X11/xorg.conf /etc/X11/xorg.conf.old
+
+2. Install the driver package:
+
+  2.1. plug in the DisplayLink device
+  2.2. build and install the FBDisplaylink driver
+  2.3. build and install the XorgDisplaylink software
+
+3. $ sudo /sbin/depmod -a
+
+At this point the screen attached to the DisplayLink device should go red
+indicating that the FBDisplaylink kernel driver has loaded.
+
+4. Edit the new xorg.conf to select the display configuration:
+
+  4.1. $ sudo emacs /etc/X11/xorg.conf
+
+At the bottom of this file are the following configration statements:
+
+
+##############################################################
+#
+#	Screen layout
+#
+Section "ServerLayout"
+	Identifier	"Multihead nvidia"
+	Screen	0	"nvidiaPrimaryScreen" Absolute 0 0
+	Screen	1	"DLScreen" RightOf "nvidiaPrimaryScreen"
+	Option	"Xinerama"	"true"
+EndSection
+
+Section "ServerLayout"
+	Identifier	"Multihead nvidia cloned"
+	Screen	0	"nvidiaPrimaryScreen" Absolute 0 0
+	Screen	1	"DLScreen" RightOf "nvidiaPrimaryScreen"
+	Option "Clone" 		"on"
+	Option	"Xinerama"	"false"
+EndSection
+
+Section "ServerLayout"
+	Identifier	"Multihead intel"
+	Screen	0	"intelPrimaryScreen" Absolute 0 0
+	Screen 	1	"DLScreen" RightOf "intelPrimaryScreen"
+	Option	"Xinerama"	"true"
+EndSection
+
+Section "ServerLayout"
+	Identifier	"Multihead intel cloned"
+	Screen	0	"intelPrimaryScreen" Absolute 0 0
+	Screen	1	"DLScreen" RightOf "intelPrimaryScreen"
+	Option "Clone" 		"on"
+	Option	"Xinerama"	"false"
+EndSection
+
+##############################################################
+#
+#	Screen layout selection
+#
+Section "ServerFlags"
+	Option "DefaultServerLayout" "Multihead intel"
+EndSection
+
+
+These config lines define 4 different screen configurations two for an nvidia
+primary display adapter and two for an Intel primary diplay adapter.
+
+1. Multihead nvidia
+2. Multihead Intel
+
+Both screens are configured to appear as a single desktop. Windows can be
+moved between the screens.
+
+3. Multihead Nvidia cloned
+4. Multihead Intel cloned
+
+The screens act as seperate screens each with their own toolbars.
+
+The Display layout to use is selcted by the line:
+
+	Option "DefaultServerLayout" "Multihead intel"
+
+Here configuration 2 above is selected. To select a different layout replace
+the text with the name of the layout, e.g.
+
+	Option "DefaultServerLayout" "Multihead nvidia"
+
+5. Load the X display driver
+
+
+No Hotplug Support for DislpayLink device
+=========================================
+
+X windows does not autosense the presence of a new display adapter. To make
+use of the new DisplayLink adapter we have just installed we need to restart
+the X server. This can be achieved in two ways.
+
+1. Reboot
+
+or:
+
+2. Logout and login again
+
+
+Troubleshooting
+===============
+
+CentOS is fairly primative in its handling of a broken xorg.conf file. If you
+do break the configuration and end up with a black screen you need to boot to
+a console from which you can edit the xorg.conf file. This is achieved by the
+following:
+
+1. Reboot the pc but do not allow it to boot as we need to edit the kernel
+parameters.
+
+2. Press 'e' to allow you to edit the boot configuration
+
+3. Edit the line beginning with kernel by adding a 3 at the rightmost end
+This final parameter is not processed by the kernel but is handed to the
+first process started. Which in our case is init.exe. This process controls
+which programmes are started. Level 3 is console mode.
+
+4. Press 'b' to boot with the edited boot commands
+
+5. Login as root and edit xorg.conf
+
+6. start the x server. There are two otions here:
+
+  6.1. # /sbin/shutdown -r now    <- this will reboot
+
+  6.2. # /sbin/telinit 5          <- this should instruct init to move to
+                                  level 5 which amongst other things starts
+                                  X. I have fould with CentOS that this
+                                  command is sometimes ignored in which case
+                                  option 6.1 is required. you need to be root
+                                  to issue this command.
+
+The edited boot configuration is not permanant and will be forgotten.
+
+
+Caveats
+=======
+
+The following caveats should be noted:
+
+* Displays are not cloned at present as X is unable to clone between
+  different adapters.
+
+* Driver only runs in a 16 bpp colour depth.
+
+* No USB hot-plugging support. The monitor can be hot plugged but the USB
+  device cannot. You should boot the system with the DisplayLink device
+  already connected to the USB bus.
+
+* Primary display is assumed to be the capable of being driven by either the
+  OSS "nv" or "i810" Xorg display drivers - most popular monitors should be
+  fine with this.
+
+-- Endurance Technology, 15th Apr 2010
